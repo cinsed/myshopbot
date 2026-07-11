@@ -1,6 +1,5 @@
 import asyncio
 import sqlite3
-import logging
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -13,10 +12,8 @@ ADMIN_ID = 8413811610
 
 conn = sqlite3.connect("shop.db")
 cursor = conn.cursor()
-
-cursor.execute("""CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, description TEXT, price_rub REAL, weight TEXT, available INTEGER DEFAULT 1)""")
-cursor.execute("""CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, product_id INTEGER, status TEXT DEFAULT 'pending', crypto_amount REAL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
-cursor.execute("""CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, orders_count INTEGER DEFAULT 0, joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+cursor.execute("CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, description TEXT, price_rub REAL, weight TEXT, available INTEGER DEFAULT 1)")
+cursor.execute("CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, product_id INTEGER, status TEXT DEFAULT 'pending', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
 
 products_data = [
     ("Альфа-PVP 1г", "Стимулятор. Кристаллы.", 3000, "1г"),
@@ -35,15 +32,13 @@ products_data = [
 ]
 
 for p in products_data:
-    cursor.execute("SELECT id FROM products WHERE name = ?", (p[0],))
+    cursor.execute("SELECT id FROM products WHERE name=?", (p[0],))
     if not cursor.fetchone():
-        cursor.execute("INSERT INTO products (name, description, price_rub, weight) VALUES (?,?,?,?)", p)
-
+        cursor.execute("INSERT INTO products (name,description,price_rub,weight) VALUES (?,?,?,?)", p)
 conn.commit()
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
-logging.basicConfig(level=logging.INFO)
 
 class OrderState(StatesGroup):
     waiting_for_district = State()
@@ -52,18 +47,15 @@ class OrderState(StatesGroup):
 main_kb = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="🛒 Каталог", callback_data="catalog")],
     [InlineKeyboardButton(text="📦 Мои заказы", callback_data="my_orders")],
-    [InlineKeyboardButton(text="📞 Поддержка", callback_data="support")]
 ])
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
-    cursor.execute("INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)", (message.from_user.id, message.from_user.username))
-    conn.commit()
     await message.answer("Добро пожаловать!", reply_markup=main_kb)
 
 @dp.callback_query(lambda c: c.data == "catalog")
 async def catalog(callback: types.CallbackQuery):
-    cursor.execute("SELECT id, name, price_rub, weight FROM products WHERE available = 1")
+    cursor.execute("SELECT id, name, price_rub, weight FROM products WHERE available=1")
     prods = cursor.fetchall()
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"{p[1]} — {p[2]}₽", callback_data=f"prod_{p[0]}")] for p in prods
@@ -72,7 +64,7 @@ async def catalog(callback: types.CallbackQuery):
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data.startswith("prod_"))
-async def product(callback: types.CallbackQuery, state: FSMContext):
+async def product(callback: types.CallbackQuery):
     pid = int(callback.data.split("_")[1])
     cursor.execute("SELECT name, description, price_rub, weight FROM products WHERE id=?", (pid,))
     p = cursor.fetchone()
@@ -86,7 +78,7 @@ async def product(callback: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(lambda c: c.data.startswith("order_"))
 async def order(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(product_id=int(callback.data.split("_")[1]))
-    await callback.message.edit_text("📍 Укажи город и район:")
+    await callback.message.edit_text("Укажи город и район:")
     await state.set_state(OrderState.waiting_for_district)
     await callback.answer()
 
@@ -96,9 +88,9 @@ async def district(message: types.Message, state: FSMContext):
     cursor.execute("SELECT price_rub FROM products WHERE id=?", (data["product_id"],))
     price = cursor.fetchone()[0]
     crypto = round(price / 6500, 6)
-    await state.update_data(crypto_amount=crypto, price=price)
+    await state.update_data(crypto_amount=crypto)
     await message.answer(
-        f"Сумма: {price} ₽\nК оплате: {crypto} USDT\n\nКошелёк: TMBQtrL9iX79vWF7jqZjNnQjPGL8aLh7\n\nОплати и нажми кнопку.",
+        f"Сумма: {price} ₽\nК оплате: {crypto} USDT\nКошелёк: TMBQtrL9iX79vWF7jqZjNnQjPGL8aLh7\n\nНажми кнопку после оплаты.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ Оплатил", callback_data="paid")],
             [InlineKeyboardButton(text="❌ Отмена", callback_data="main_menu")]
@@ -111,10 +103,9 @@ async def paid(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Проверяю...")
     await asyncio.sleep(2)
     data = await state.get_data()
-    cursor.execute("INSERT INTO orders (user_id, product_id, status, crypto_amount) VALUES (?,?,?,?)",
-                   (callback.from_user.id, data["product_id"], "paid", data["crypto_amount"]))
+    cursor.execute("INSERT INTO orders (user_id, product_id, status) VALUES (?,?,?)", (callback.from_user.id, data["product_id"], "paid"))
     conn.commit()
-    await callback.message.edit_text("✅ Заказ оплачен!\n\n📍 Адрес: ул. Примерная, д.5\n📦 Место: под лестницей, чёрный свёрток\n\n⚠️ Удали переписку.")
+    await callback.message.edit_text("✅ Заказ оплачен!\n\n📍 Адрес: ул. Примерная, д.5\n📦 Место: под лестницей, свёрток\n\n⚠️ Удали переписку.")
     await state.clear()
     await callback.answer()
 
@@ -130,6 +121,7 @@ async def orders(callback: types.CallbackQuery):
     ords = cursor.fetchall()
     if not ords:
         await callback.message.edit_text("Нет заказов.", reply_markup=main_kb)
+        await callback.answer()
         return
     text = "Заказы:\n\n"
     for o in ords:
@@ -137,11 +129,6 @@ async def orders(callback: types.CallbackQuery):
         pn = cursor.fetchone()
         text += f"#{o[0]} | {pn[0] if pn else '?'} | {o[2]} | {o[3]}\n"
     await callback.message.edit_text(text, reply_markup=main_kb)
-    await callback.answer()
-
-@dp.callback_query(lambda c: c.data == "support")
-async def support(callback: types.CallbackQuery):
-    await callback.message.edit_text("📞 @admin", reply_markup=main_kb)
     await callback.answer()
 
 async def main():
